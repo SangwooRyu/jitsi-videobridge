@@ -278,9 +278,6 @@ public class BandwidthAllocator<T extends MediaSourceContainer>
         // Extract and update the effective constraints.
         oldEffectiveConstraints = effectiveConstraints;
         effectiveConstraints = PrioritizeKt.getEffectiveConstraints(sortedSources, allocationSettings);
-        effectiveConstraints.forEach((src, constraint) -> {
-            effectiveConstraints.put(src, new VideoConstraints(720, constraint.getMaxFrameRate()));
-        });
         logger.trace(() ->
                 "Allocating: sortedSources="
                         + sortedSources.stream().map(MediaSourceDesc::getSourceName).collect(Collectors.joining(","))
@@ -593,7 +590,8 @@ public class BandwidthAllocator<T extends MediaSourceContainer>
                             allocTargetStats.put("target_framerate", alloc.getTargetLayer().getFrameRate());
                             allocTargetStats.put("target_height", alloc.getTargetLayer().getHeight());
                             allocEidStats.put("target", allocTargetStats);
-
+                        }
+                        if (alloc.getIdealLayer() != null) {
                             JSONObject allocIdealStats = new JSONObject();
                             allocIdealStats.put("ideal_quality", alloc.getIdealLayer().getIndex());
                             // allocIdealStats.put("ideal_temporal_id", alloc.getIdealLayer().getTid());
