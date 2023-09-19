@@ -21,8 +21,15 @@ import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import kotlin.math.abs
+import java.util.Queue
+import java.util.LinkedList
+import java.util.concurrent.ArrayBlockingQueue
 
 open class JitterStats {
+    var delayGrad: Double = 0.0
+        private set
+    var delayGradQueue: Queue<Double> = ArrayBlockingQueue<Double>(16)
+        private set
     var jitter: Double = 0.0
         private set
     /**
@@ -38,6 +45,13 @@ open class JitterStats {
         if (previousPacketReceivedTimestamp != null) {
             jitter = calculateJitter(
                 jitter,
+                previousPacketSentTimestamp!!,
+                previousPacketReceivedTimestamp!!,
+                currentPacketSentTimestamp,
+                currentPacketReceivedTimestamp
+            )
+            delayGrad = calculateDelayGrad(
+                delayGradQueue,
                 previousPacketSentTimestamp!!,
                 previousPacketReceivedTimestamp!!,
                 currentPacketSentTimestamp,
@@ -79,6 +93,33 @@ open class JitterStats {
              * sampled.
              */
             return currentJitter + (abs(delta.toMillis()) - currentJitter) / 16.0
+        }
+
+        fun calculateDelayGrad(
+            delayGradQueue: Queue<Double>,
+            previousPacketSentTimestamp: Instant,
+            previousPacketReceivedTimestamp: Instant,
+            currentPacketSentTimestamp: Instant,
+            currentPacketReceivedTimestamp: Instant
+        ): Double {
+            val delta = Duration.between(previousPacketSentTimestamp, previousPacketReceivedTimestamp) -
+                Duration.between(currentPacketSentTimestamp, currentPacketReceivedTimestamp)
+            addToDelayGradQueue(delayGradQueue, delta.toMillis().toDouble())
+            val avgDelayGrad = avgDelayGradQueue(delayGradQueue)
+            return avgDelayGrad
+        }
+
+        fun addToDelayGradQueue(q: Queue<Double>, value: Double) {
+            q.offer(value)
+            if (q.size >= 16) {
+                q.poll()
+            }
+        }
+
+        fun avgDelayGradQueue(q: Queue<Double>): Double {
+            val sum: Double = q.sum()
+            val avg: Double = sum / q.size
+            return avg
         }
     }
 }

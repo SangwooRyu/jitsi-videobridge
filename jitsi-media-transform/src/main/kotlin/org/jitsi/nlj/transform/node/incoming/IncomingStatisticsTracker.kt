@@ -198,6 +198,7 @@ class IncomingSsrcStats(
         numExpectedPackets = numExpectedPackets,
         cumulativePacketsLost = cumulativePacketsLost,
         jitter = jitterStats.jitter,
+        delayGrad = jitterStats.delayGrad,
         durationActive = durationActive,
         mediaType = mediaType
     )
@@ -312,6 +313,7 @@ class IncomingSsrcStats(
         val numExpectedPackets: Int = 0,
         val cumulativePacketsLost: Int = 0,
         val jitter: Double = 0.0,
+        val delayGrad: Double = 0.0,
         val durationActive: Duration = Duration.ZERO,
         val mediaType: MediaType
     ) {
@@ -334,6 +336,7 @@ class IncomingSsrcStats(
             put("num_expected_packets", numExpectedPackets)
             put("cumulative_packets_lost", cumulativePacketsLost)
             put("jitter", jitter)
+            put("delay_grad", delayGrad)
             put("duration_active_ms", durationActive.toMillis())
             put("media_type", mediaType.toString())
         }

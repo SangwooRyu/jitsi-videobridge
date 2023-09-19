@@ -201,7 +201,7 @@ public class BandwidthAllocator<T extends MediaSourceContainer>
     }
 
     @NotNull
-    BandwidthAllocation getAllocation()
+    public BandwidthAllocation getAllocation()
     {
         return allocation;
     }
@@ -278,6 +278,9 @@ public class BandwidthAllocator<T extends MediaSourceContainer>
         // Extract and update the effective constraints.
         oldEffectiveConstraints = effectiveConstraints;
         effectiveConstraints = PrioritizeKt.getEffectiveConstraints(sortedSources, allocationSettings);
+        effectiveConstraints.forEach((src, constraint) -> {
+            effectiveConstraints.put(src, new VideoConstraints(720, constraint.getMaxFrameRate()));
+        });
         logger.trace(() ->
                 "Allocating: sortedSources="
                         + sortedSources.stream().map(MediaSourceDesc::getSourceName).collect(Collectors.joining(","))
@@ -351,15 +354,15 @@ public class BandwidthAllocator<T extends MediaSourceContainer>
         Map<String, Integer> mappingRL = new HashMap<String, Integer>();
 
         String rlServer = "https://141.223.181.223:9005/predict"; //RL Server Request address
-        String rlTest = callRL(rlServer, data);
+        String rlAlloc = callRL(rlServer, data);
 
         JSONObject targetInfo = new JSONObject();
 
         try {
             // JSON Pasrsing : Move from parse function inside of allocate function
-            // targetInfo = parseJSON(rlTest);
+            // targetInfo = parseJSON(rlAlloc);
             JSONParser jsonParser = new JSONParser();
-            Object obj = jsonParser.parse(rlTest);
+            Object obj = jsonParser.parse(rlAlloc);
             JSONObject jsonObj = (JSONObject) obj;
             targetInfo = jsonObj;
         } catch (Exception e) {
@@ -368,6 +371,7 @@ public class BandwidthAllocator<T extends MediaSourceContainer>
 
         logger.info("##### TEST data ##### : " + data.toString());
         logger.info("##### TEST ##### : " + targetInfo);
+        // logger.info("##### DIAG ##### : " + this.diagnosticContext.toString());
 
         Integer useRL = 0;
         if (targetInfo != null) {
@@ -482,7 +486,7 @@ public class BandwidthAllocator<T extends MediaSourceContainer>
             targetBps += sourceBitrateAllocation.getTargetBitrate();
             idealBps += sourceBitrateAllocation.getIdealBitrate();
         }
-        allocations.forEach(element -> logger.info(element));
+        // allocations.forEach(element -> logger.info(element));
         return new BandwidthAllocation(allocations, oversending, idealBps, targetBps, suspendedIds);
     }
 
@@ -494,18 +498,21 @@ public class BandwidthAllocator<T extends MediaSourceContainer>
     }
 
     synchronized JSONObject statInfoCollector() {
-        List<T> endpointList = this.endpointsSupplier.get();
         JSONObject result = new JSONObject();
-        JSONObject eps = new JSONObject();
 
+        // Basic Information
+        result.put("timestamp", clock.millis());
+        result.put("endpoint_id", endpointGwId);
+
+        List<T> endpointList = this.endpointsSupplier.get();
         Endpoint itself = endpointGw;
-        //logger.info("##### Endpint GW ##### : " + endpointGw);
 
         double rttSumMs = 0;
         long rttCount = 0;
         double epJitterSumMs = 0;
         int epJitterCount = 0;
-
+        double delayGradSumMs = 0;
+        int delayGradCount = 0;
         long bwe = 0;
 
         TransceiverStats transceiverStats = itself.getTransceiver().getTransceiverStats();
@@ -514,10 +521,16 @@ public class BandwidthAllocator<T extends MediaSourceContainer>
         for (IncomingSsrcStats.Snapshot ssrcStats : incomingStats.getSsrcStats().values())
         {
             double ssrcJitter = ssrcStats.getJitter();
+            double ssrcDelayGrad = ssrcStats.getDelayGrad();
             if (ssrcJitter != 0)
             {
                 epJitterSumMs += Math.abs(ssrcJitter);
                 epJitterCount++;
+            }
+            if (ssrcDelayGrad != 0)
+            {
+                delayGradSumMs += ssrcDelayGrad;
+                delayGradCount++;
             }
         }
 
@@ -534,26 +547,20 @@ public class BandwidthAllocator<T extends MediaSourceContainer>
 
         bwe = this.getAvailableBandwidth();
 
+        // Stats Information between endpoint and its client
+        result.put("available_bw", bwe);
+        result.put("jitter_ms", epJitterCount > 0 ? epJitterSumMs/epJitterCount : 0);
+        result.put("rtt_ms", rttCount > 0 ? rttSumMs/rttCount : 0);
+        result.put("delay_grad_ms", delayGradCount > 0? delayGradSumMs/delayGradCount : 0);
+        result.put("pkt_lost", pkt_lost);
+        result.put("pkt_recv", pkt_received);
+
+        // Available Layer Information of each opponent
+        JSONObject video_from = new JSONObject();
         for(T ep : endpointList) {
             JSONObject epStats = new JSONObject();
             Endpoint endpoint = (Endpoint) ep;
-
-            epStats.put("jitter_ms", epJitterCount > 0 ? epJitterSumMs/epJitterCount : 0);
-            epStats.put("round_trip_time_ms", rttCount > 0 ? rttSumMs/rttCount : 0);
-            epStats.put("pkt_lost", pkt_lost);
-            epStats.put("pkt_received", pkt_received);
-
-
-            JSONObject videoConstraints = new JSONObject();
-            Map<String, VideoConstraints> videoConstraintsMap = allocationSettings
-                    .getVideoConstraints();
-            VideoConstraints vc = videoConstraintsMap.get(endpoint.getId());
-            if(vc != null) {
-                videoConstraints.put("maxHeight", vc.getMaxHeight());
-                videoConstraints.put("maxFramerte", vc.getMaxFrameRate());
-            }
-            epStats.put("video_constraints", videoConstraints);
-
+            
             List<LayerSnapshot> layerInfos = getAllLayerBps().get(endpoint.getId());
             JSONObject layerAllStats = new JSONObject();
             if(layerInfos != null){
@@ -562,8 +569,8 @@ public class BandwidthAllocator<T extends MediaSourceContainer>
                     Double bitrate = layer.component2();
 
                     JSONObject layerInfoStats = new JSONObject();
-                    layerInfoStats.put("temporal_id", lDesc.getTid());
-                    layerInfoStats.put("spatial_id", lDesc.getSid());
+                    // layerInfoStats.put("temporal_id", lDesc.getTid());
+                    // layerInfoStats.put("spatial_id", lDesc.getSid());
                     layerInfoStats.put("height", lDesc.getHeight());
                     layerInfoStats.put("framerate", lDesc.getFrameRate());
                     layerInfoStats.put("bitrate", bitrate);
@@ -581,42 +588,28 @@ public class BandwidthAllocator<T extends MediaSourceContainer>
                             //logger.info("########## " + endpoint.getId() + "'s BA -  Endpoint : " + alloc.getEndpointId() + ", TargetLayer : " + alloc.getTargetLayer().toString() + ", IdealLayer : " + alloc.getIdealLayer().toString() + ", targetIdx : " + alloc.getTargetLayer().getIndex());
                             JSONObject allocTargetStats = new JSONObject();
                             allocTargetStats.put("target_quality", alloc.getTargetLayer().getIndex());
-                            allocTargetStats.put("target_temporal_id", alloc.getTargetLayer().getTid());
-                            allocTargetStats.put("target_spatial_id", alloc.getTargetLayer().getSid());
+                            // allocTargetStats.put("target_temporal_id", alloc.getTargetLayer().getTid());
+                            // allocTargetStats.put("target_spatial_id", alloc.getTargetLayer().getSid());
                             allocTargetStats.put("target_framerate", alloc.getTargetLayer().getFrameRate());
                             allocTargetStats.put("target_height", alloc.getTargetLayer().getHeight());
                             allocEidStats.put("target", allocTargetStats);
 
                             JSONObject allocIdealStats = new JSONObject();
                             allocIdealStats.put("ideal_quality", alloc.getIdealLayer().getIndex());
-                            allocIdealStats.put("ideal_temporal_id", alloc.getIdealLayer().getTid());
-                            allocIdealStats.put("ideal_spatial_id", alloc.getIdealLayer().getSid());
+                            // allocIdealStats.put("ideal_temporal_id", alloc.getIdealLayer().getTid());
+                            // allocIdealStats.put("ideal_spatial_id", alloc.getIdealLayer().getSid());
                             allocIdealStats.put("ideal_framerate", alloc.getIdealLayer().getFrameRate());
                             allocIdealStats.put("ideal_height", alloc.getIdealLayer().getHeight());
                             allocEidStats.put("ideal", allocIdealStats);
                         }
-                        epStats.put("Allocations", allocEidStats);
+                        epStats.put("allocations", allocEidStats);
                     }
                 }
             }
-            eps.put(endpoint.getId(), epStats);
-
-            //endpoint.getConference().getLocalEndpoints();
+            video_from.put(endpoint.getId(), epStats);
         }
-        JSONObject sumStats = new JSONObject();
-        //logger.info("##### (" + (cnt++) + ") Available BWE: "+ aBwe + ", TargetBps: " + tBps + ", IdealBps: " + iBps);
-        //Long aBwe = this.getAvailableBandwidth();
-        //Long tBps = this.getAllocation().getTargetBps();
-        //Long iBps = this.getAllocation().getIdealBps();
-        sumStats.put("Available_BW", bwe);
-        sumStats.put("timestamp", clock.millis());
-        //sumStats.put("Total_targetBps", tBps);
-        //sumStats.put("Total_idealBps", iBps);
-        eps.put("Summary", sumStats);
+        result.put("video_from", video_from);
 
-        result.put(endpointGwId, eps);
-
-        // logger.info("##### Check : " + result);
         return result;
     }
 

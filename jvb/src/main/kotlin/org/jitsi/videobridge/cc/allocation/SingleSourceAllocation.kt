@@ -343,7 +343,6 @@ internal class SingleSourceAllocation(
         val effectivePreferredHeight = max(preferredHeight, minHeight)
         val preferredIndex = ratesList.lastIndexWhich { it.layer.height <= effectivePreferredHeight }
     //    logger.info("##### preferredIndex :"+ preferredIndex)
-
         return Layers(ratesList, preferredIndex, -1)
     }
 
